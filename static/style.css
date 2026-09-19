@@ -1,0 +1,104 @@
+:root {
+  color-scheme: light;
+  --ink: #17212b;
+  --muted: #5f6b76;
+  --line: #d9e0e7;
+  --surface: #ffffff;
+  --background: #f4f7fa;
+  --accent: #3157c8;
+  --accent-dark: #24439e;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--background);
+  font: 16px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.container { width: min(1080px, calc(100% - 32px)); margin: 48px auto; }
+h1 { margin: 0 0 12px; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.1; }
+h2 { margin: 0 0 8px; font-size: 1.15rem; }
+a { color: var(--accent); }
+
+.instructions, .center-card {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 8px 25px rgb(28 45 72 / 6%);
+}
+
+.instructions p:last-child { margin-bottom: 0; }
+.participant { display: block; margin-bottom: 8px; font-weight: 700; }
+.email-card input { width: min(100%, 420px); padding: 12px; border: 1px solid #aeb8c2; border-radius: 8px; font: inherit; }
+.email-card { margin: 28px 0; }
+.email-card p { margin-top: 8px; font-size: 0.9rem; }
+.muted { color: var(--muted); }
+.eyebrow { color: var(--accent); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.task-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.task-heading button { flex-shrink: 0; }
+.task-progress p { margin-bottom: 8px; font-weight: 700; }
+.task-progress progress { display: block; width: 100%; height: 8px; accent-color: var(--accent); }
+.task-navigation { display: flex; justify-content: space-between; gap: 12px; }
+.save-note { font-size: 0.9rem; text-align: right; }
+.participant-hash { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+td .participant-hash { min-width: 130px; max-width: 220px; }
+dialog { width: min(640px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 28px; border: 1px solid var(--line); border-radius: 16px; color: var(--ink); box-shadow: 0 20px 80px rgb(0 0 0 / 20%); }
+dialog::backdrop { background: rgb(23 33 43 / 55%); }
+dialog h2 { font-size: 1.65rem; line-height: 1.2; }
+dialog h3 { margin: 20px 0 6px; font-size: 1rem; }
+dialog ol { padding-left: 22px; }
+dialog li + li { margin-top: 8px; }
+dialog button { width: 100%; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+
+.tweet-card {
+  margin: 20px 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.tweet-card legend { padding: 0 8px; color: var(--muted); font-weight: 700; }
+.tweet-text { margin-top: 4px; font-size: 1.13rem; }
+.choices { display: flex; flex-wrap: wrap; gap: 10px; }
+.choices label { padding: 9px 12px; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
+.choices label:has(input:checked) { border-color: var(--accent); background: #edf1ff; }
+
+button, .button-link {
+  display: inline-block;
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  background: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+button:hover, .button-link:hover { background: var(--accent-dark); }
+button.secondary { background: var(--surface); color: var(--accent); border: 1px solid var(--line); }
+button.secondary:hover { background: #edf1ff; }
+button:disabled { opacity: 0.5; cursor: default; }
+.center-card { max-width: 680px; margin: 80px auto; text-align: center; }
+.results-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: white; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { padding: 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { background: #eef2f7; white-space: nowrap; }
+.pill { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #edf1ff; color: #24439e; font-weight: 700; }
+
+@media (max-width: 640px) {
+  .container { margin: 24px auto; }
+  .results-heading { align-items: start; flex-direction: column; }
+  .task-heading { align-items: start; flex-direction: column; gap: 8px; }
+  dialog { padding: 20px; }
+  .choices label { flex: 1 0 40%; }
+}

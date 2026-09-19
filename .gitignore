@@ -1,0 +1,5 @@
+__pycache__/
+.venv/
+labels.db
+.email_hash_key
+labels.db.*

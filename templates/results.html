@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Collected Responses{% endblock %}
+{% block content %}
+  <div class="results-heading">
+    <div>
+      <h1>Collected Responses</h1>
+      <p>{{ responses | length }} labels recorded.</p>
+    </div>
+    <a href="{{ url_for('index') }}">Return to task</a>
+  </div>
+
+  {% if responses %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Participant hash</th>
+            <th>Tweet ID</th>
+            <th>Tweet</th>
+            <th>Chosen label</th>
+            <th>Ground truth</th>
+            <th>Recorded</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for response in responses %}
+            <tr>
+              <td><code class="participant-hash">{{ response.participant_id }}</code></td>
+              <td>{{ response.tweet_id }}</td>
+              <td>{{ response.text }}</td>
+              <td><span class="pill">{{ response.label }}</span></td>
+              <td>{{ response.ground_truth }}</td>
+              <td>{{ response.timestamp }} UTC</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <section class="center-card">
+      <p>No responses yet. Complete the task once, then reload this page.</p>
+    </section>
+  {% endif %}
+{% endblock %}
