@@ -1,6 +1,8 @@
 """Run real Chrome checks with a disposable database and browser profile."""
 
 import os
+import argparse
+import re
 import shutil
 import signal
 import subprocess
@@ -9,7 +11,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from flask import request
+import flask
 from werkzeug.serving import WSGIRequestHandler, make_server
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -23,6 +25,9 @@ class QuietRequestHandler(WSGIRequestHandler):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--screenshots", type=Path)
+    options = parser.parse_args()
     chrome = os.environ.get("CHROME_BINARY") or shutil.which("google-chrome") or shutil.which("chromium")
     if not chrome:
         chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -40,14 +45,13 @@ def main():
                 for index in range(6)
             ), encoding="utf-8"
         )
-        labeling.init_db()
-        labeling.app.config["EMAIL_HASH_KEY"] = labeling.load_hash_key()
+        labeling.configure_app()
         report = {}
         completed = threading.Event()
 
         @labeling.app.post("/__browser_report__")
         def browser_report():
-            report.update(request.get_json())
+            report.update(flask.request.get_json())
             completed.set()
             return "", 204
 
@@ -57,7 +61,7 @@ def main():
 
         @labeling.app.after_request
         def block_storage_for_test(response):
-            if request.args.get("blocked-storage") == "1":
+            if flask.request.args.get("blocked-storage") == "1":
                 script = "<script>Object.defineProperty(window, 'localStorage', {get() {throw new Error('Storage blocked');}});</script>"
                 response.set_data(response.get_data(as_text=True).replace("<head>", "<head>" + script))
             return response
@@ -78,6 +82,17 @@ def main():
                 )
                 try:
                     finished = completed.wait(timeout=30)
+                    if finished and report.get("status") == "passed" and options.screenshots:
+                        chrome_log.seek(0)
+                        debug_port = re.search(rb"DevTools listening on ws://127\.0\.0\.1:(\d+)", chrome_log.read())
+                        if not debug_port:
+                            raise RuntimeError("Chrome did not expose its local debugging port.")
+                        subprocess.run(
+                            ["node", str(Path(__file__).with_name("capture_browser.mjs")),
+                             "http://127.0.0.1:" + debug_port[1].decode(),
+                             f"http://127.0.0.1:{server.server_port}", str(options.screenshots)],
+                            check=True, timeout=45,
+                        )
                 finally:
                     if process.poll() is None:
                         os.killpg(process.pid, signal.SIGTERM)
@@ -93,7 +108,7 @@ def main():
                     raise SystemExit("Browser checks failed or did not finish within 30 seconds.")
             with labeling.get_db() as connection:
                 rows = connection.execute("SELECT participant_id FROM responses").fetchall()
-            assert len(rows) == 5 and all(len(row[0]) == 64 for row in rows)
+            assert len(rows) == 7 and all(len(row[0]) == 64 for row in rows)
             print("PASS: browser flow and persisted database checked using disposable storage.")
         finally:
             server.shutdown()

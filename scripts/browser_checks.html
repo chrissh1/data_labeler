@@ -4,109 +4,135 @@
 <pre id="checks" data-status="running">Running browser checks…</pre>
 <iframe title="Task under test" style="width: 1100px; height: 900px; border: 0"></iframe>
 <script>
-const frame = document.querySelector("iframe");
-const output = document.querySelector("#checks");
+const frame = document.querySelector('iframe');
+const output = document.querySelector('#checks');
 const passed = [];
 let page;
-
 function check(condition, message) {
   if (!condition) throw new Error(message);
   passed.push(message);
 }
-
 function navigate(action) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Navigation timed out")), 8000);
-    frame.onload = () => {
-      clearTimeout(timeout);
-      page = frame.contentDocument;
-      resolve();
-    };
+    const timeout = setTimeout(() => reject(new Error('Navigation timed out')), 8000);
+    frame.onload = () => { clearTimeout(timeout); page = frame.contentDocument; resolve(); };
     action();
   });
 }
-
-function click(selector) {
-  page.querySelector(selector).click();
+async function until(condition) {
+  const deadline = Date.now() + 5000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('State did not become ready');
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
 }
-
-function visibleCards() {
-  return page.querySelectorAll(".tweet-card:not([hidden])");
+function click(selector) { page.querySelector(selector).click(); }
+async function save(label = 'joy') {
+  click(`input[value="${label}"]`);
+  click('#next-message');
+  await until(() => !page.querySelector('#next-message').disabled);
 }
-
+async function results() {
+  return new DOMParser().parseFromString(await (await fetch('/results')).text(), 'text/html');
+}
+async function start(email) {
+  page.querySelector('#email').value = email;
+  await navigate(() => page.querySelector('#start-form').requestSubmit());
+}
 async function run() {
   localStorage.clear();
-  await navigate(() => { frame.src = "/"; });
-  check(page.querySelector("dialog").open, "First visit opens tutorial");
-  click("#tutorial-done");
-  check(!page.querySelector("dialog").open, "Tutorial closes");
-  check(visibleCards().length === 1, "Only one tweet is visible");
-  check(page.querySelector("#previous-message").disabled, "Back is disabled on first tweet");
-  click("#next-message");
-  check(page.querySelector("#progress-label").textContent === "Message 1 of 5", "Empty email cannot advance");
-  page.querySelector("#email").value = "not-an-email";
-  click("#next-message");
-  check(page.activeElement.id === "email", "Malformed email focuses email field");
-  page.querySelector("#email").value = "browser-test@example.com";
-  click("#next-message");
-  check(page.querySelector("#progress-label").textContent === "Message 1 of 5", "Unanswered tweet cannot advance");
-  click('.tweet-card:not([hidden]) input[value="joy"]');
-  click("#next-message");
-  check(page.querySelector("#progress-label").textContent === "Message 2 of 5", "Next advances one tweet");
-  click("#previous-message");
-  check(page.querySelector('.tweet-card:not([hidden]) input[value="joy"]').checked, "Back preserves previous answer");
-  click('.tweet-card:not([hidden]) input[value="love"]');
-  click("#next-message");
-  click("#view-instructions");
-  check(page.querySelector("dialog").open, "Instructions can be reopened");
-  click("#tutorial-done");
-  check(page.querySelector("#progress-label").textContent === "Message 2 of 5", "Tutorial preserves progress");
-  for (let step = 2; step <= 5; step++) {
-    check(visibleCards().length === 1, `Exactly one tweet at step ${step}`);
-    click('.tweet-card:not([hidden]) input[value="joy"]');
-    if (step < 5) click("#next-message");
-  }
-  check(page.querySelector("#next-message").textContent === "Submit labels", "Final step offers submission");
-  await navigate(() => click("#next-message"));
-  check(page.querySelector("h1").textContent === "Thank you!", "Five-step submission succeeds");
-  const hash = page.querySelector(".participant-hash").textContent;
-  check(/^[0-9a-f]{64}$/.test(hash), "Confirmation shows full hash");
-  check(!page.body.textContent.includes("browser-test@example.com"), "Confirmation does not show email");
-  await navigate(() => { frame.src = "/results"; });
-  check(page.querySelectorAll("tbody tr").length === 5, "Exactly five labels persisted");
-  check([...page.querySelectorAll(".participant-hash")].every(element => element.textContent === hash), "Results show consistent hashes");
-  check(!page.body.textContent.includes("browser-test@example.com"), "Results do not show email");
-  check([...page.querySelectorAll(".pill")].filter(element => element.textContent === "love").length === 1, "Changed answer is saved");
-  await navigate(() => { frame.src = "/"; });
-  check(!page.querySelector("dialog").open, "Return visit remembers tutorial completion");
-  check(page.querySelector("#progress-label").textContent === "Message 1 of 5", "New visit resets progress");
-  check(!page.querySelector("input[type=radio]:checked"), "New set has no saved selections");
-  check(page.querySelector("#email").value === "", "App does not persist email in the form");
-  frame.style.width = "360px";
-  check(page.documentElement.scrollWidth <= 360, "Task fits a narrow mobile viewport");
-  click("#view-instructions");
-  check(page.querySelector("dialog").getBoundingClientRect().width <= 360, "Tutorial fits a narrow mobile viewport");
-  click("#tutorial-done");
-  await navigate(() => { frame.src = "/?blocked-storage=1"; });
-  check(page.querySelector("dialog").open, "Blocked storage still shows tutorial");
-  click("#tutorial-done");
-  page.querySelector("#email").value = "browser-test@example.com";
-  click('.tweet-card:not([hidden]) input[value="joy"]');
-  click("#next-message");
-  check(page.querySelector("#progress-label").textContent === "Message 2 of 5", "Blocked storage does not prevent labeling");
-  output.dataset.status = "passed";
-  output.textContent = passed.join("\n");
-}
+  await navigate(() => { frame.src = '/'; });
+  check(page.querySelector('dialog').open, 'First visit opens tutorial');
+  click('#tutorial-done');
+  check(!page.querySelector('dialog').open, 'Tutorial closes');
+  page.querySelector('#email').value = 'not-an-email';
+  page.querySelector('#start-form').requestSubmit();
+  check(page.querySelector('#email').matches(':invalid'), 'Malformed email cannot start');
+  await start('browser-test@example.com');
+  check(!page.querySelector('dialog').open, 'Tutorial completion persists');
+  check(page.querySelectorAll('fieldset:not([hidden])').length === 1, 'Exactly one message appears');
+  check(page.querySelector('#message-heading').textContent === 'Message 1 of 6', 'Queue includes entire dataset');
+  const link = page.querySelector('#results-link');
+  check(link.target === '_blank' && link.rel.includes('noopener'), 'Results opens in a separate tab');
+  click('#next-message');
+  check(page.querySelector('#message-heading').textContent === 'Message 1 of 6', 'Unanswered message cannot advance');
+  check(page.querySelector('#previous-message').disabled, 'Back is disabled initially');
+  await save();
+  check(page.querySelector('#progress-label').textContent === '1 of 6 labeled', 'Each answer saves immediately');
+  check((await results()).querySelectorAll('tbody tr').length === 1, 'First answer is persisted before completion');
+  click('#previous-message');
+  check(page.querySelector('input[value="joy"]').checked, 'Back restores saved answer');
+  await save('love');
+  check((await results()).querySelectorAll('tbody tr').length === 1, 'Correction does not duplicate a row');
+  check((await results()).querySelector('[data-label="Chosen label"]').textContent === 'love', 'Correction updates saved label');
 
+  const originalFetch = frame.contentWindow.fetch.bind(frame.contentWindow);
+  frame.contentWindow.fetch = async () => { throw new Error('Simulated network failure'); };
+  await save('fear');
+  check(!page.querySelector('#save-error').hidden, 'Network failure shows retry message');
+  check(page.querySelector('input[value="fear"]').checked, 'Failure retains selected answer');
+  check(page.querySelector('#message-heading').textContent === 'Message 2 of 6', 'Failure does not advance');
+  frame.contentWindow.fetch = async (...args) => { await originalFetch(...args); throw new Error('Lost confirmation'); };
+  await save('fear');
+  check((await results()).querySelectorAll('tbody tr').length === 2, 'Lost confirmation can follow a successful write');
+  frame.contentWindow.fetch = originalFetch;
+  await save('fear');
+  check((await results()).querySelectorAll('tbody tr').length === 2, 'Retry after lost confirmation is idempotent');
+  await navigate(() => frame.contentWindow.location.reload());
+  check(page.querySelector('#progress-label').textContent === '2 of 6 labeled', 'Refresh resumes saved progress');
+  check(page.querySelector('#message-heading').textContent === 'Message 3 of 6', 'Refresh continues at an unanswered message');
+  check(!page.querySelector('input:checked'), 'Next unanswered message has no preselected label');
+  click('#view-instructions');
+  check(page.querySelector('dialog').open, 'Instructions reopen while labeling');
+  click('#tutorial-done');
+  for (let count = 2; count < 6; count++) await save();
+  check(!page.querySelector('#completion').hidden, 'Exhaustion shows completion');
+  check(page.querySelector('#progress-label').textContent === '6 of 6 labeled', 'Progress reaches the dataset size');
+  check((await results()).querySelectorAll('tbody tr').length === 6, 'Every tweet has one saved answer');
+  await navigate(() => frame.contentWindow.location.reload());
+  check(!page.querySelector('#completion').hidden, 'Completion survives refresh');
+  click('#review-answers');
+  check(page.querySelector('input[value="love"]').checked, 'Completed answers can be reviewed');
+  await save('surprise');
+  check((await results()).querySelectorAll('tbody tr').length === 6, 'Review updates without adding rows');
+
+  for (const width of [320, 375, 414, 768]) {
+    frame.style.width = `${width}px`;
+    check(page.documentElement.scrollWidth <= width, `Task fits ${width}px`);
+    check([...page.querySelectorAll('button')].filter(button => button.getClientRects().length).every(button => button.scrollWidth <= button.clientWidth), `Controls fit ${width}px`);
+    click('#view-instructions');
+    check(page.querySelector('dialog').getBoundingClientRect().width <= width, `Tutorial fits ${width}px`);
+    click('#tutorial-done');
+  }
+  await navigate(() => { frame.src = '/results'; });
+  check(!page.body.textContent.includes('browser-test@example.com'), 'Results do not expose email');
+  check([...page.querySelectorAll('.participant-hash')].every(element => /^[0-9a-f]{64}$/.test(element.textContent)), 'Results show full participant hashes');
+  for (const width of [320, 375, 414, 768]) {
+    frame.style.width = `${width}px`;
+    check(page.documentElement.scrollWidth <= width, `Results fit ${width}px`);
+  }
+  await fetch('/leave', {method: 'POST'});
+  await navigate(() => { frame.src = '/'; });
+  await start('browser-test@example.com');
+  check(!page.querySelector('#completion').hidden, 'Re-entering same email resumes completion');
+  await fetch('/leave', {method: 'POST'});
+  await navigate(() => { frame.src = '/'; });
+  await start('another@example.com');
+  check(page.querySelector('#progress-label').textContent === '0 of 6 labeled', 'Another participant receives every tweet');
+  await navigate(() => { frame.src = '/?blocked-storage=1'; });
+  check(page.querySelector('dialog').open, 'Blocked storage still shows tutorial');
+  click('#tutorial-done');
+  await save();
+  check(page.querySelector('#progress-label').textContent === '1 of 6 labeled', 'Blocked storage still permits saving');
+  output.dataset.status = 'passed';
+  output.textContent = passed.join('\n');
+}
 run().catch(error => {
-  output.dataset.status = "failed";
-  output.textContent = passed.join("\n") + "\nFAILED: " + error.message;
+  output.dataset.status = 'failed';
+  output.textContent = passed.join('\n') + '\nFAILED: ' + error.message;
 }).finally(() => {
-  fetch("/__browser_report__", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({status: output.dataset.status, messages: output.textContent})
-  });
+  fetch('/__browser_report__', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: output.dataset.status, messages: output.textContent})});
 });
 </script>
 </html>

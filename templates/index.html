@@ -1,67 +1,75 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="task-heading">
-    <div>
-      <p class="eyebrow">Human judgments · Emotion research</p>
-      <h1>How does this message feel?</h1>
-      <p class="muted">Five short messages. Your interpretation matters.</p>
-    </div>
-    <button type="button" class="secondary" id="view-instructions" hidden>View instructions</button>
-  </div>
+  <header class="task-heading">
+    <h1>Emotion labeling</h1>
+    <nav aria-label="Task navigation">
+      <button type="button" class="secondary" id="view-instructions" hidden>Instructions</button>
+      <a class="button-link secondary" id="results-link" href="{{ url_for('results') }}" target="_blank" rel="noopener" aria-label="Results (opens in a new tab)">Results ↗</a>
+    </nav>
+  </header>
 
-  <noscript><p class="instructions">Please enable JavaScript to view the tutorial and label messages one at a time.</p></noscript>
-
-  <dialog id="tutorial" aria-labelledby="tutorial-title" aria-describedby="tutorial-motivation">
-    <p class="eyebrow">Welcome to the study</p>
-    <h2 id="tutorial-title">Help us understand emotion in language</h2>
-    <p id="tutorial-motivation">We’re studying how people interpret emotions in short messages. Your labels help us compare human judgments with existing dataset labels.</p>
-    <h3>How to label</h3>
+  <dialog id="tutorial" aria-labelledby="tutorial-title">
+    <h2 id="tutorial-title">Before you begin</h2>
+    <p>We’re studying how people interpret emotions in short messages. Your labels help us compare human judgments with existing dataset labels.</p>
     <ol>
-      <li>Read the message and choose the emotion most strongly expressed by its author. Base your answer only on the text.</li>
-      <li>If several emotions seem possible, choose the closest fit. Use your own judgment; you don’t need to guess the original label.</li>
-      <li>Select <strong>Next</strong> to continue. You can go <strong>Back</strong> to change an answer. After the fifth message, select <strong>Submit labels</strong>.</li>
+      <li>Read the message and choose the emotion most strongly expressed by the author.</li>
+      <li>If more than one fits, choose the closest. Base your answer only on the text.</li>
+      <li>Select <strong>Save &amp; next</strong> to save your answer and continue. Use <strong>Back</strong> to make a correction.</li>
     </ol>
-    <p>Choose from <strong>{{ emotions | join(', ') }}</strong>.</p>
-    <h3>Your email and privacy</h3>
-    <p>We use your email to recognize repeat contributions. We store and display a coded participant identifier, not your email address. Contributions with the same identifier can be linked together.</p>
-    <p class="muted">Answers are saved when you submit all five. Refreshing starts a new set. You can reopen these instructions at any time.</p>
-    <button type="button" id="tutorial-done" autofocus>Start labeling</button>
+    <p>You can stop whenever you like. Use the same email to return to your remaining messages. Only a coded participant identifier is saved, not your email.</p>
+    <button type="button" id="tutorial-done" autofocus>Got it</button>
   </dialog>
+  <noscript><p>Please enable JavaScript to label messages one at a time.</p></noscript>
 
-  <form id="labeling-form" method="post" action="{{ url_for('submit') }}" hidden>
-    <div class="email-card">
-      <label class="participant" for="email">Email address</label>
-      <input id="email" name="email" type="email" required maxlength="254" placeholder="you@example.com" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="email-help">
-      <p id="email-help" class="muted">Use the same email each time. Only a coded identifier is saved.</p>
+  {% if task is none %}
+    <section class="start-section">
+      <h2>Start or continue</h2>
+      <p>Enter your email so we can remember which messages you’ve labeled.</p>
+      <form id="start-form" method="post" action="{{ url_for('start') }}">
+        <label class="participant" for="email">Email address</label>
+        <div class="start-controls">
+          <input id="email" name="email" type="email" required maxlength="254" placeholder="you@example.com" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="email-help">
+          <button type="submit">Continue</button>
+        </div>
+        <p id="email-help" class="muted">No verification email. We save only a hash of your address.</p>
+      </form>
+    </section>
+  {% else %}
+    <p class="muted task-intro">Choose the emotion most strongly expressed by the author.</p>
+    <div class="label-panel">
+    <div class="progress-row">
+      <p id="progress-label" role="status" aria-live="polite"></p>
+      <span class="muted">Saved one at a time</span>
     </div>
-
-    <div class="task-progress">
-      <p id="progress-label" role="status" aria-live="polite">Message 1 of {{ tweets | length }}</p>
-      <progress id="task-progress" value="1" max="{{ tweets | length }}" aria-labelledby="progress-label"></progress>
-    </div>
-
-    {% for tweet in tweets %}
-      <fieldset class="tweet-card"{% if not loop.first %} hidden{% endif %}>
-        <legend tabindex="-1">Message {{ loop.index }} of {{ tweets | length }}</legend>
-        <input type="hidden" name="tweet_id" value="{{ tweet.id }}">
-        <p class="tweet-text">“{{ tweet.text }}”</p>
-        <p class="muted">Which emotion is most strongly expressed?</p>
+    <progress id="task-progress" max="{{ task.tweets | length or 1 }}" value="{{ task.completedCount }}" aria-labelledby="progress-label"></progress>
+    <form id="labeling-form" method="post" action="{{ url_for('submit') }}" hidden>
+      <fieldset id="tweet-card" class="tweet-card">
+        <legend id="message-heading" tabindex="-1">Message</legend>
+        <p id="tweet-text" class="tweet-text"></p>
+        <p class="choice-prompt">Select one emotion</p>
         <div class="choices">
           {% for emotion in emotions %}
-            <label>
-              <input type="radio" name="label_{{ tweet.id }}" value="{{ emotion }}" required>
-              {{ emotion | capitalize }}
-            </label>
+            <label><input type="radio" name="label" value="{{ emotion }}" required> {{ emotion | capitalize }}</label>
           {% endfor %}
         </div>
       </fieldset>
-    {% endfor %}
-
-    <div class="task-navigation">
-      <button type="button" class="secondary" id="previous-message" disabled>Back</button>
-      <button type="submit" id="next-message">Next</button>
+      <p id="save-error" class="error-message" role="alert" hidden></p>
+      <a id="resume-session" href="{{ url_for('index') }}" target="_blank" rel="noopener" hidden>Enter email again ↗</a>
+      <div class="task-navigation">
+        <button type="button" class="secondary" id="previous-message">Back</button>
+        <button type="submit" id="next-message">Save &amp; next</button>
+      </div>
+    </form>
+    <section id="completion" hidden aria-labelledby="completion-title">
+      <h2 id="completion-title" tabindex="-1">All messages labeled</h2>
+      <p id="completion-message">Your answers are saved. Thank you for taking part.</p>
+      <button type="button" class="secondary" id="review-answers">Review answers</button>
+    </section>
     </div>
-    <p class="muted save-note">Your answers are saved together after the fifth message.</p>
-  </form>
-  <script src="{{ url_for('static', filename='task.js') }}" defer></script>
+    <form class="participant-controls" method="post" action="{{ url_for('leave') }}">
+      <button type="submit" class="text-button">Change email</button>
+    </form>
+    <script id="task-data" type="application/json">{{ task | tojson }}</script>
+  {% endif %}
+  <script src="{{ url_for('static', filename='task.js', v=asset_version('static/task.js')) }}" defer></script>
 {% endblock %}

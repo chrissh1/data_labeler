@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Collected Responses{% endblock %}
+{% block container_class %}results-container{% endblock %}
 {% block content %}
   <div class="results-heading">
     <div>
-      <h1>Collected Responses</h1>
+      <h1>Results</h1>
       <p>{{ responses | length }} labels recorded.</p>
     </div>
-    <a href="{{ url_for('index') }}">Return to task</a>
+    <a href="{{ url_for('results') }}">Refresh results</a>
   </div>
 
   {% if responses %}
@@ -25,12 +26,12 @@
         <tbody>
           {% for response in responses %}
             <tr>
-              <td><code class="participant-hash">{{ response.participant_id }}</code></td>
-              <td>{{ response.tweet_id }}</td>
-              <td>{{ response.text }}</td>
-              <td><span class="pill">{{ response.label }}</span></td>
-              <td>{{ response.ground_truth }}</td>
-              <td>{{ response.timestamp }} UTC</td>
+              <td data-label="Participant hash"><code class="participant-hash">{{ response.participant_id }}</code></td>
+              <td data-label="Tweet ID">{{ response.tweet_id }}</td>
+              <td data-label="Tweet">{{ response.text }}</td>
+              <td data-label="Chosen label">{{ response.label }}</td>
+              <td data-label="Ground truth">{{ response.ground_truth }}</td>
+              <td data-label="Recorded">{{ response.timestamp }} UTC</td>
             </tr>
           {% endfor %}
         </tbody>
@@ -38,7 +39,8 @@
     </div>
   {% else %}
     <section class="center-card">
-      <p>No responses yet. Complete the task once, then reload this page.</p>
+      <p>No labels saved yet. Save an answer in the task tab, then refresh this page.</p>
     </section>
   {% endif %}
+  <p><a href="{{ url_for('index') }}">Open task</a></p>
 {% endblock %}

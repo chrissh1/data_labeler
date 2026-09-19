@@ -1,0 +1,38 @@
+/* Hallmark · theme: restrained research form · tone: approachable */
+:root {
+  --color-paper: oklch(100% 0 0);
+  --color-paper-2: oklch(97% 0.003 260);
+  --color-background: oklch(98% 0.004 260);
+  --color-selected: oklch(95% 0.025 265);
+  --color-ink: oklch(25% 0.015 260);
+  --color-muted: oklch(46% 0.015 260);
+  --color-rule: oklch(78% 0.008 260);
+  --color-accent: oklch(46% 0.17 265);
+  --color-accent-hover: oklch(37% 0.15 265);
+  --color-accent-ink: oklch(100% 0 0);
+  --color-error: oklch(43% 0.17 25);
+  --color-focus: oklch(25% 0.015 260);
+  --color-backdrop: oklch(20% 0.01 260 / 45%);
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, monospace;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-message: 1.25rem;
+  --text-heading: 1.625rem;
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --ink: var(--color-ink);
+  --muted: var(--color-muted);
+  --line: var(--color-rule);
+  --surface: var(--color-paper);
+  --background: var(--color-background);
+  --accent: var(--color-accent);
+  --accent-dark: var(--color-accent-hover);
+}
