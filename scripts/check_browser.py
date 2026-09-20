@@ -25,6 +25,9 @@ class QuietRequestHandler(WSGIRequestHandler):
 
 
 def main():
+    # This check always uses disposable SQLite storage, never a configured project.
+    for name in ("DATABASE_URL", "EMAIL_HASH_KEY", "VERCEL"):
+        os.environ.pop(name, None)
     parser = argparse.ArgumentParser()
     parser.add_argument("--screenshots", type=Path)
     options = parser.parse_args()

@@ -71,5 +71,5 @@
     </form>
     <script id="task-data" type="application/json">{{ task | tojson }}</script>
   {% endif %}
-  <script src="{{ url_for('static', filename='task.js', v=asset_version('static/task.js')) }}" defer></script>
+  <script src="{{ asset_url('task.js') }}" defer></script>
 {% endblock %}

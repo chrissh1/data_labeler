@@ -3,3 +3,8 @@ __pycache__/
 labels.db
 .email_hash_key
 labels.db.*
+.env
+.env.*
+!.env.example
+public/
+.vercel/

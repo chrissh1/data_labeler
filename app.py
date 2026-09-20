@@ -5,9 +5,15 @@ import random
 import re
 import secrets
 import sqlite3
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 import flask
+import psycopg
+import psycopg.rows
+import psycopg.conninfo
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,22 +36,59 @@ class Emotion(Enum):
 
 app = flask.Flask(__name__)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", TEMPLATES_AUTO_RELOAD=True)
+configuration_lock = threading.Lock()
 
 
 @app.context_processor
 def template_assets():
     def asset_version(filename):
+        if os.environ.get("VERCEL"):
+            return os.environ.get("VERCEL_GIT_COMMIT_SHA", "1")
         return (BASE_DIR / filename).stat().st_mtime_ns
-    return {"asset_version": asset_version}
+
+    def asset_url(filename):
+        version = asset_version(f"static/{filename}")
+        if os.environ.get("VERCEL"):
+            return f"/static/{filename}?v={version}"
+        return flask.url_for("static", filename=filename, v=version)
+
+    return {"asset_version": asset_version, "asset_url": asset_url}
 
 
+@contextmanager
 def get_db():
-    connection = sqlite3.connect(DATABASE)
-    connection.row_factory = sqlite3.Row
-    return connection
+    if app.config.get("DATABASE_URL"):
+        options = psycopg.conninfo.conninfo_to_dict(app.config["DATABASE_URL"])
+        options.setdefault("sslmode", "require")
+        options.setdefault("connect_timeout", "10")
+        connection = psycopg.connect(
+            **options, row_factory=psycopg.rows.dict_row, prepare_threshold=None,
+        )
+    else:
+        connection = sqlite3.connect(DATABASE)
+        connection.row_factory = sqlite3.Row
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
+def response_table():
+    return "labeler.responses" if app.config.get("DATABASE_URL") else "responses"
+
+
+def sql_parameter():
+    return "%s" if app.config.get("DATABASE_URL") else "?"
 
 
 def init_db():
+    if app.config.get("DATABASE_URL"):
+        with get_db() as connection:
+            # Serialize cold-start schema creation across serverless instances.
+            connection.execute("SELECT pg_advisory_xact_lock(5942026)")
+            connection.execute((BASE_DIR / "schema.sql").read_text(encoding="utf-8"))
+        return
     database_existed = DATABASE.exists()
     with get_db() as connection:
         connection.execute(
@@ -79,6 +122,13 @@ def init_db():
 
 
 def load_hash_key():
+    if "EMAIL_HASH_KEY" in os.environ:
+        value = os.environ["EMAIL_HASH_KEY"]
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+            raise RuntimeError("EMAIL_HASH_KEY must contain exactly 64 hexadecimal characters.")
+        return bytes.fromhex(value)
+    if app.config.get("DATABASE_URL") or os.environ.get("VERCEL"):
+        raise RuntimeError("Set EMAIL_HASH_KEY before connecting to the hosted database.")
     if not HASH_KEY_FILE.exists():
         with get_db() as connection:
             has_responses = connection.execute("SELECT 1 FROM responses LIMIT 1").fetchone()
@@ -120,17 +170,38 @@ def load_tweets():
 
 
 def configure_app():
-    init_db()
+    app.config["APP_CONFIGURED"] = False
+    app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL", "").strip() or None
+    if os.environ.get("VERCEL") and not app.config["DATABASE_URL"]:
+        raise RuntimeError("Set DATABASE_URL in Vercel; local SQLite storage is not persistent.")
+    if not app.config["DATABASE_URL"]:
+        init_db()
     key = load_hash_key()
+    if app.config["DATABASE_URL"]:
+        init_db()
     app.config["EMAIL_HASH_KEY"] = key
     app.secret_key = hmac.new(key, b"labeler-session-signing", "sha256").digest()
+    app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("VERCEL"))
+    app.config["APP_CONFIGURED"] = True
+
+
+def initialized_wsgi_app(environ, start_response):
+    # Configure before Flask opens the signed session for the first request.
+    if not app.config.get("APP_CONFIGURED"):
+        with configuration_lock:
+            if not app.config.get("APP_CONFIGURED"):
+                configure_app()
+    return flask.Flask.wsgi_app(app, environ, start_response)
+
+
+app.wsgi_app = initialized_wsgi_app
 
 
 def participant_task(participant_id):
     tweets = load_tweets()
     with get_db() as connection:
         responses = connection.execute(
-            "SELECT tweet_id, label FROM responses WHERE participant_id = ? ORDER BY id",
+            f"SELECT tweet_id, label FROM {response_table()} WHERE participant_id = {sql_parameter()} ORDER BY id",
             (participant_id,),
         ).fetchall()
     by_id = {tweet["id"]: tweet for tweet in tweets}
@@ -201,9 +272,11 @@ def submit():
     ):
         return flask.jsonify(error="A message or emotion was invalid."), 400
     with get_db() as connection:
+        parameter = sql_parameter()
         connection.execute(
-            """
-            INSERT INTO responses (participant_id, tweet_id, label) VALUES (?, ?, ?)
+            f"""
+            INSERT INTO {response_table()} AS responses (participant_id, tweet_id, label)
+            VALUES ({parameter}, {parameter}, {parameter})
             ON CONFLICT(participant_id, tweet_id) DO UPDATE
             SET label = excluded.label, timestamp = CURRENT_TIMESTAMP
             WHERE responses.label != excluded.label
@@ -218,9 +291,9 @@ def results():
     tweets = {int(tweet["id"]): tweet for tweet in load_tweets()}
     with get_db() as connection:
         responses = connection.execute(
-            """
+            f"""
             SELECT participant_id, tweet_id, label, timestamp
-            FROM responses
+            FROM {response_table()}
             ORDER BY id DESC
             """
         ).fetchall()
@@ -235,7 +308,10 @@ def results():
                 "text": tweet.get("text", "Tweet not found"),
                 "label": response["label"],
                 "ground_truth": tweet.get("ground_truth", "unknown"),
-                "timestamp": response["timestamp"],
+                "timestamp": (
+                    response["timestamp"].astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                    if isinstance(response["timestamp"], datetime) else response["timestamp"]
+                ),
             }
         )
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Emotion Labeling Task{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=asset_version('static/style.css')) }}">
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}">
     <link rel="stylesheet" href="{{ url_for('design_tokens', v=asset_version('tokens.css')) }}">
   </head>
   <body>

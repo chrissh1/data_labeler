@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import tempfile
@@ -11,6 +12,7 @@ import flask
 from jinja2 import DictLoader
 
 import app as labeling
+from scripts.build_assets import build_assets
 
 
 class LabelingTests(unittest.TestCase):
@@ -34,11 +36,76 @@ class LabelingTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         config = patch.dict(labeling.app.config, EMAIL_HASH_KEY=b'test-key' * 4,
-                            SECRET_KEY='test-session-key', TESTING=True)
+                            SECRET_KEY='test-session-key', TESTING=True,
+                            DATABASE_URL=None, APP_CONFIGURED=True)
         config.start()
         self.addCleanup(config.stop)
         labeling.init_db()
         self.client = labeling.app.test_client()
+        environment = patch.dict(os.environ, {}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_imported_app_initializes_on_first_request(self):
+        with patch.dict(labeling.app.config, APP_CONFIGURED=False, EMAIL_HASH_KEY=None,
+                        SECRET_KEY=None):
+            response = self.start()
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(self.save().status_code, 200)
+            self.assertTrue(labeling.app.config['APP_CONFIGURED'])
+
+    def test_failed_initialization_can_retry_on_the_next_request(self):
+        with patch.dict(labeling.app.config, APP_CONFIGURED=False), \
+                patch.object(labeling, 'init_db', side_effect=[RuntimeError('Database unavailable'), None]):
+            with self.assertRaisesRegex(RuntimeError, 'Database unavailable'):
+                self.client.get('/')
+            self.assertFalse(labeling.app.config['APP_CONFIGURED'])
+            self.assertEqual(self.start().status_code, 302)
+            self.assertTrue(labeling.app.config['APP_CONFIGURED'])
+
+    def test_environment_hash_key_is_used_without_creating_a_file(self):
+        with patch.dict(os.environ, EMAIL_HASH_KEY='ab' * 32):
+            self.assertEqual(labeling.load_hash_key(), bytes.fromhex('ab' * 32))
+        self.assertFalse(labeling.HASH_KEY_FILE.exists())
+
+    def test_invalid_environment_key_does_not_fall_back_to_a_generated_key(self):
+        for key in ('', 'not-hex', 'ab' * 31):
+            with self.subTest(key=key), patch.dict(os.environ, EMAIL_HASH_KEY=key):
+                with self.assertRaisesRegex(RuntimeError, 'EMAIL_HASH_KEY'):
+                    labeling.load_hash_key()
+        self.assertFalse(labeling.HASH_KEY_FILE.exists())
+
+    def test_vercel_refuses_sqlite_fallback(self):
+        with patch.dict(os.environ, VERCEL='1'):
+            with self.assertRaisesRegex(RuntimeError, 'DATABASE_URL'):
+                labeling.configure_app()
+
+    def test_remote_database_requires_a_persistent_environment_key(self):
+        with patch.dict(os.environ, DATABASE_URL='postgresql://localhost/labeler_test'):
+            with self.assertRaisesRegex(RuntimeError, 'EMAIL_HASH_KEY'):
+                labeling.configure_app()
+
+    def test_vercel_page_does_not_require_local_static_files(self):
+        with patch.dict(os.environ, VERCEL='1', VERCEL_GIT_COMMIT_SHA='test-deployment'), \
+                patch.object(labeling, 'BASE_DIR', self.directory):
+            html = self.client.get('/').get_data(as_text=True)
+        self.assertIn('/static/style.css?v=test-deployment', html)
+        self.assertIn('/static/task.js?v=test-deployment', html)
+
+    def test_vercel_build_copies_assets_without_private_files(self):
+        static = self.directory / 'static'
+        static.mkdir()
+        (static / 'style.css').write_text('body { color: navy; }')
+        (static / 'task.js').write_text('"use strict";')
+        (self.directory / 'tokens.css').write_text(':root {}')
+        (self.directory / '.env').write_text('PRIVATE=example')
+        build_assets(self.directory)
+        build_assets(self.directory)
+        public = self.directory / 'public'
+        self.assertEqual({p.relative_to(public).as_posix() for p in public.rglob('*') if p.is_file()},
+                         {'static/style.css', 'static/task.js', 'tokens.css'})
+        for relative in ('static/style.css', 'static/task.js', 'tokens.css'):
+            self.assertEqual((public / relative).read_bytes(), (self.directory / relative).read_bytes())
 
     def start(self, email='participant@example.com', client=None):
         return (client or self.client).post('/start', data={'email': email})
