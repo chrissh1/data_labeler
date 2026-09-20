@@ -1,6 +1,6 @@
 # Emotion Labeling Task
 
-A small Flask research interface using SQLite locally or Supabase PostgreSQL when deployed. Participants label short messages one at a time until they have labeled every tweet in the dataset. Each participant gets a separate queue; answers from other participants do not remove tweets from it.
+A small Flask research interface using SQLite locally or Supabase PostgreSQL when deployed. Participants label tweets one at a time in batches of up to five, then submit the batch together. Each participant gets a separate queue; answers from other participants do not remove tweets from it.
 
 The current CSV contains 101 examples from the [DAIR.AI Emotion dataset](https://huggingface.co/datasets/dair-ai/emotion), with columns `id`, `tweet`, and `emotion`. Numeric codes follow `Emotion` in `app.py`: 0 = sadness, 1 = joy, 2 = love, 3 = anger, 4 = fear, 5 = surprise. The interface displays names and stores labels as names. Ground truth is shown only in results.
 
@@ -65,22 +65,22 @@ No Supabase API key, browser database credentials, or Supabase Auth setup is nee
 
 The Vercel build copies the existing CSS/JS and tokens into `public/`, which Vercel serves from its CDN. The source files remain in `static/` and `tokens.css`; do not edit generated files in `public/`. Asset links on Vercel use the deployment's commit ID instead of reading file timestamps from the function's filesystem. [Vercel Flask assets](https://vercel.com/docs/frameworks/backend/flask#serving-static-assets)
 
-After deployment, verify: open the homepage, enter an email, save one label, refresh to resume, and open Results in its separate tab. Check Vercel's runtime logs if a request fails.
+After deployment, verify: enter an email, choose labels using buttons 1–5, visit Results and return to Labeling, then submit the complete batch. Confirm all labels appear in Results and that another batch starts only when requested. Check Vercel's runtime logs if a request fails.
 
 Existing local SQLite labels stay in `labels.db`; they are **not automatically uploaded to Supabase**. A new Supabase table starts empty. Keep both the local database and original hashing key if you want to migrate those earlier labels. Reverting code or changing `DATABASE_URL` does not copy labels between databases; preserve/export the hosted responses before switching storage.
 
 ## Participant flow
 
 1. Read the first-visit tutorial, then enter an email. Only basic format is checked; there is no verification email or ownership check.
-2. Choose an emotion and select **Save & next**. Each answer is saved before the next message appears. An unsuccessful save keeps the selection and offers a retry.
-3. Use **Back** to review or change an answer. Saving a correction replaces that participant's previous label for the tweet. Repeated saves do not add duplicate rows.
-4. Stop whenever you like. Refreshing resumes after your saved answers. Re-entering the same email in a later visit restores the same progress. Unsaved selections do not survive refreshing.
-5. After every tweet is labeled, a completion message appears. **Review answers** allows corrections.
-6. **Results** opens `/results` in a separate browser tab. Select **Refresh results** to see later saves. The table shows participant hash, tweet ID, text, chosen label, ground truth, and timestamp.
+2. Receive up to five previously unlabeled tweets, with one visible at a time. Choose a label and select **Next** to move to the next unanswered tweet, wrapping around if needed. Use the numbered **1–5** buttons below the tweet to move freely between them. A checkmark indicates a selected label; the active tweet is highlighted.
+3. Once every tweet in the batch has a label, **Submit labels** replaces **Next**. You can still review and change choices using the numbered buttons before submitting. The server saves the whole batch in one transaction; a failed write cannot leave a partially saved batch. Retrying a submission does not add duplicates or change previously submitted labels.
+4. After confirmation, stop or choose **Label 5 more**. The last batch can contain fewer than five tweets. A completion message appears when the participant has labeled the entire dataset.
+5. **Labeling** and **Results** navigate in the same browser tab. The current batch stays assigned in the signed session cookie. Draft choices and the selected tweet are remembered in session storage, so visiting Results or refreshing retains them in that tab. Drafts contain no email and do not appear in Results until submitted. If browser storage is blocked, labeling still works, but the interface asks you to submit before leaving because it cannot retain drafts.
+6. Re-entering the same email restores saved progress and excludes previously submitted tweets. A new sign-in assigns a fresh batch; unsubmitted drafts are not shared across devices or retained after the tab's session storage is cleared.
 
-Unanswered tweets are shuffled when the task page loads. Saved answers appear first for review. New tweets added to the CSV become available on the next page load; keep tweet IDs stable. **Change email** ends the current browser session without deleting any saved answers.
+Each batch is randomly sampled from that participant's remaining tweets and stays stable across page loads. New tweets added to the CSV can appear in subsequent batches; keep tweet IDs stable. If an assigned tweet is removed or a batch is partially completed in another session, the next page load assigns an available batch. **Change email** ends the current browser session without deleting submitted answers. Conflicting submissions from other sessions are rejected without overwriting saved labels. The Results table shows participant hash, tweet ID, text, chosen label, ground truth, and timestamp.
 
-The tutorial can always be reopened with **Instructions**. Completion is remembered using local storage. When storage is blocked, instructions appear on each visit and labeling still works. This version shows the updated tutorial once even if the earlier five-message tutorial was completed.
+The tutorial can always be reopened with **Instructions**. Tutorial completion is remembered using local storage. When storage is blocked, instructions appear on each visit and labeling still works. This version shows the updated batch tutorial once even if an earlier tutorial was completed.
 
 ## Privacy and storage
 
@@ -98,6 +98,8 @@ If the old database contains duplicate answers for a participant/tweet pair, sta
 
 To roll back: stop the server, preserve the current database separately, restore `labels.db.before-continuous.bak` as `labels.db`, restore the earlier application code, and keep the original `.email_hash_key`. Labels collected after the backup will remain only in the preserved current database.
 
+The five-tweet batch change requires no schema migration. All previously submitted individual labels remain valid and are excluded from new batches. To roll back only the batch interface, restore the previous application code while keeping the current database and hashing key. Participants should reload any already-open labeling pages when the new submission API is deployed.
+
 ## Verification
 
 ```bash
@@ -114,7 +116,7 @@ The browser checks require an installed Chrome/Chromium and use disposable CSV f
 python3 scripts/check_browser.py --screenshots /tmp/labeler-ui-review
 ```
 
-Tests cover independent participant queues, immediate saves, corrections, concurrent retries, resuming, exhaustion, invalid input, key persistence, and migration. Browser checks exercise the tutorial, save failures, lost confirmations, retries, the full dataset, and layouts at 320, 375, 414, and 768 pixels. Screenshot mode also checks that Results opens another tab.
+The shared batch contract checks five-tweet assignment, stable batches, complete validation, atomic rollback, concurrent retries, conflicting submissions, existing labels, independent participants, and the final partial batch against both SQLite and PostgreSQL. Browser checks exercise numbered navigation, draft corrections, same-tab Results navigation, refresh recovery, submission failures, lost confirmations, blocked storage, and layouts at 320, 375, 414, and 768 pixels. Screenshot mode also verifies that Results opens in the same tab.
 
 `check_postgres.py` requires locally installed PostgreSQL binaries (`initdb`, `pg_ctl`, and `createdb`) on PATH. It creates an isolated PostgreSQL server using temporary storage and a Unix socket, runs `test_postgres.py`, then stops the server and cleans up. It does not use your Supabase credentials. Those integration tests are skipped during ordinary unit-test discovery; run the script to exercise the real PostgreSQL path. Browser checks also ignore hosted database environment settings and always use disposable SQLite storage.
 
@@ -128,7 +130,7 @@ Tests cover independent participant queues, immediate saves, corrections, concur
 - `templates/`: tutorial, start form, labeling, results, and error pages.
 - `static/task.js`: sequential labeling and tutorial behavior.
 - `static/style.css`, `tokens.css`, `design.md`: shared styles and the simple research-form design.
-- `test_app.py`, `test_postgres.py`, `scripts/`: regression, database integration, and browser checks.
+- `test_app.py`, `test_postgres.py`, `batch_contract.py`, `scripts/`: regression, database integration, and browser checks.
 - `labels.db`, `.email_hash_key`, `labels.db.*`, `.env`: private local state excluded from Git; also exclude these from shared ZIP files.
 
 ## Data and ethics note

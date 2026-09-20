@@ -27,10 +27,16 @@ async function until(condition) {
   }
 }
 function click(selector) { page.querySelector(selector).click(); }
-async function save(label = 'joy') {
+function choose(index, label = 'joy') {
+  click(`.tweet-number[data-index="${index}"]`);
   click(`input[value="${label}"]`);
-  click('#next-message');
-  await until(() => !page.querySelector('#next-message').disabled);
+}
+function fillBatch() {
+  for (let index = 0; index < page.querySelectorAll('.tweet-number').length; index++) choose(index);
+}
+async function submit() {
+  click('#submit-batch');
+  await until(() => !page.querySelector('#submit-batch').disabled);
 }
 async function results() {
   return new DOMParser().parseFromString(await (await fetch('/results')).text(), 'text/html');
@@ -39,8 +45,13 @@ async function start(email) {
   page.querySelector('#email').value = email;
   await navigate(() => page.querySelector('#start-form').requestSubmit());
 }
+async function leave() {
+  await fetch('/leave', {method: 'POST'});
+  await navigate(() => { frame.src = '/'; });
+}
 async function run() {
   localStorage.clear();
+  sessionStorage.clear();
   await navigate(() => { frame.src = '/'; });
   check(page.querySelector('dialog').open, 'First visit opens tutorial');
   click('#tutorial-done');
@@ -50,80 +61,132 @@ async function run() {
   check(page.querySelector('#email').matches(':invalid'), 'Malformed email cannot start');
   await start('browser-test@example.com');
   check(!page.querySelector('dialog').open, 'Tutorial completion persists');
-  check(page.querySelectorAll('fieldset:not([hidden])').length === 1, 'Exactly one message appears');
-  check(page.querySelector('#message-heading').textContent === 'Message 1 of 6', 'Queue includes entire dataset');
-  const link = page.querySelector('#results-link');
-  check(link.target === '_blank' && link.rel.includes('noopener'), 'Results opens in a separate tab');
-  click('#next-message');
-  check(page.querySelector('#message-heading').textContent === 'Message 1 of 6', 'Unanswered message cannot advance');
-  check(page.querySelector('#previous-message').disabled, 'Back is disabled initially');
-  await save();
-  check(page.querySelector('#progress-label').textContent === '1 of 6 labeled', 'Each answer saves immediately');
-  check((await results()).querySelectorAll('tbody tr').length === 1, 'First answer is persisted before completion');
-  click('#previous-message');
-  check(page.querySelector('input[value="joy"]').checked, 'Back restores saved answer');
-  await save('love');
-  check((await results()).querySelectorAll('tbody tr').length === 1, 'Correction does not duplicate a row');
-  check((await results()).querySelector('[data-label="Chosen label"]').textContent === 'love', 'Correction updates saved label');
-
-  const originalFetch = frame.contentWindow.fetch.bind(frame.contentWindow);
-  frame.contentWindow.fetch = async () => { throw new Error('Simulated network failure'); };
-  await save('fear');
-  check(!page.querySelector('#save-error').hidden, 'Network failure shows retry message');
-  check(page.querySelector('input[value="fear"]').checked, 'Failure retains selected answer');
-  check(page.querySelector('#message-heading').textContent === 'Message 2 of 6', 'Failure does not advance');
-  frame.contentWindow.fetch = async (...args) => { await originalFetch(...args); throw new Error('Lost confirmation'); };
-  await save('fear');
-  check((await results()).querySelectorAll('tbody tr').length === 2, 'Lost confirmation can follow a successful write');
-  frame.contentWindow.fetch = originalFetch;
-  await save('fear');
-  check((await results()).querySelectorAll('tbody tr').length === 2, 'Retry after lost confirmation is idempotent');
+  check(page.querySelectorAll('fieldset:not([hidden])').length === 1, 'Exactly one tweet appears');
+  check(page.querySelector('#message-heading').textContent === 'Tweet 1 of 5', 'First batch contains five tweets');
+  check(page.querySelectorAll('.tweet-number').length === 5, 'Numbered navigation has five buttons');
+  check(page.querySelector('#results-link').target === '', 'Results link stays in this tab');
+  check(page.querySelector('#submit-batch').hidden, 'Submit is hidden while the batch is incomplete');
+  check(!page.querySelector('#next-tweet').hidden, 'Next is the primary action for an incomplete batch');
+  check(page.querySelector('#next-tweet').disabled, 'Next waits for a label on the current tweet');
+  page.querySelector('#labeling-form').requestSubmit();
+  check(!page.querySelector('#save-error').hidden, 'Incomplete batch shows validation feedback');
+  check((await results()).querySelectorAll('tbody tr').length === 0, 'Incomplete batch saves nothing');
+  choose(4, 'fear');
+  check(page.querySelector('#message-heading').textContent === 'Tweet 5 of 5', 'Number five jumps directly to the fifth tweet');
+  check(page.querySelectorAll('[aria-current="step"]').length === 1, 'Only the current tweet is marked active');
+  check(page.querySelector('.tweet-number[data-index="4"]').getAttribute('aria-label').includes('labeled'), 'Answered navigation button has an accessible status');
+  click('#next-tweet');
+  check(page.querySelector('#message-heading').textContent === 'Tweet 1 of 5', 'Next wraps from the last tweet to an unanswered one');
+  choose(0);
+  check(page.querySelector('#progress-label').textContent === '2 of 5 labeled in this batch', 'Batch progress counts drafts');
+  click('#next-tweet');
+  check(page.querySelector('#message-heading').textContent === 'Tweet 2 of 5', 'Next advances without submitting labels');
+  check(page.querySelector('#submit-batch').hidden, 'Submit remains hidden with only two labels');
+  click('.tweet-number[data-index="0"]');
+  const batchId = JSON.parse(page.querySelector('#task-data').textContent).batchId;
+  await navigate(() => click('#results-link'));
+  check(frame.contentWindow.location.pathname === '/results', 'Results loads in the current frame');
+  check(page.querySelectorAll('tbody tr').length === 0, 'Draft answers are absent from Results');
+  await navigate(() => click('#labeling-link'));
+  check(JSON.parse(page.querySelector('#task-data').textContent).batchId === batchId, 'Returning from Results keeps the assigned batch');
+  check(page.querySelector('input[value="joy"]').checked, 'Returning from Results restores selected emotion');
+  click('.tweet-number[data-index="4"]');
+  check(page.querySelector('input[value="fear"]').checked, 'Selections on other tweets also survive Results navigation');
   await navigate(() => frame.contentWindow.location.reload());
-  check(page.querySelector('#progress-label').textContent === '2 of 6 labeled', 'Refresh resumes saved progress');
-  check(page.querySelector('#message-heading').textContent === 'Message 3 of 6', 'Refresh continues at an unanswered message');
-  check(!page.querySelector('input:checked'), 'Next unanswered message has no preselected label');
-  click('#view-instructions');
-  check(page.querySelector('dialog').open, 'Instructions reopen while labeling');
-  click('#tutorial-done');
-  for (let count = 2; count < 6; count++) await save();
-  check(!page.querySelector('#completion').hidden, 'Exhaustion shows completion');
-  check(page.querySelector('#progress-label').textContent === '6 of 6 labeled', 'Progress reaches the dataset size');
-  check((await results()).querySelectorAll('tbody tr').length === 6, 'Every tweet has one saved answer');
+  check(page.querySelector('#message-heading').textContent === 'Tweet 5 of 5', 'Refresh restores current tweet');
+  check(page.querySelector('input[value="fear"]').checked, 'Refresh restores draft labels');
+  click('#next-tweet');
+  check(page.querySelector('#message-heading').textContent === 'Tweet 2 of 5', 'Next skips answered tweets to reach the next unanswered one');
+  for (let index = 1; index < 4; index++) {
+    check(page.querySelector('#submit-batch').hidden, 'Submit is hidden before labeling tweet ' + (index + 1));
+    click('input[value="joy"]');
+    if (index < 3) click('#next-tweet');
+  }
+  check(page.querySelector('#next-tweet').hidden, 'Next disappears when all five tweets have labels');
+  check(!page.querySelector('#submit-batch').hidden, 'Submit replaces Next as soon as the fifth label is selected');
+  choose(0, 'love');
+  check(!page.querySelector('#submit-batch').hidden, 'Reviewing an answered tweet keeps Submit available');
   await navigate(() => frame.contentWindow.location.reload());
-  check(!page.querySelector('#completion').hidden, 'Completion survives refresh');
-  click('#review-answers');
-  check(page.querySelector('input[value="love"]').checked, 'Completed answers can be reviewed');
-  await save('surprise');
-  check((await results()).querySelectorAll('tbody tr').length === 6, 'Review updates without adding rows');
+  check(!page.querySelector('#submit-batch').hidden && page.querySelector('#next-tweet').hidden, 'A restored complete draft shows Submit instead of Next');
+  check(page.querySelector('#progress-label').textContent === '5 of 5 labeled in this batch', 'Editing a draft keeps progress accurate');
+  check((await results()).querySelectorAll('tbody tr').length === 0, 'All five choices remain drafts until submission');
 
   for (const width of [320, 375, 414, 768]) {
     frame.style.width = `${width}px`;
     check(page.documentElement.scrollWidth <= width, `Task fits ${width}px`);
     check([...page.querySelectorAll('button')].filter(button => button.getClientRects().length).every(button => button.scrollWidth <= button.clientWidth), `Controls fit ${width}px`);
+    check([...page.querySelectorAll('.tweet-number')].every(button => button.getBoundingClientRect().width >= 44), `Numbered buttons have touch targets at ${width}px`);
     click('#view-instructions');
     check(page.querySelector('dialog').getBoundingClientRect().width <= width, `Tutorial fits ${width}px`);
     click('#tutorial-done');
   }
-  await navigate(() => { frame.src = '/results'; });
+
+  const originalFetch = frame.contentWindow.fetch.bind(frame.contentWindow);
+  frame.contentWindow.fetch = async () => { throw new Error('Simulated network failure'); };
+  await submit();
+  check(!page.querySelector('#save-error').hidden, 'Network failure offers a retry');
+  check(page.querySelector('input[value="love"]').checked, 'Failure retains corrected draft');
+  check(page.querySelector('#progress-label').textContent === '5 of 5 labeled in this batch', 'Failure retains the entire batch');
+  check((await results()).querySelectorAll('tbody tr').length === 0, 'Network failure saves no labels');
+  let releaseRequest;
+  let requests = 0;
+  frame.contentWindow.fetch = async (...args) => {
+    requests++;
+    await new Promise(resolve => { releaseRequest = resolve; });
+    await originalFetch(...args);
+    throw new Error('Lost confirmation');
+  };
+  click('#submit-batch');
+  click('#submit-batch');
+  check(requests === 1 && page.querySelector('#submit-batch').disabled, 'Double click sends one batch submission');
+  check([...page.querySelectorAll('.tweet-number')].every(button => button.disabled), 'Navigation is disabled during submission');
+  releaseRequest();
+  await until(() => !page.querySelector('#submit-batch').disabled);
+  check((await results()).querySelectorAll('tbody tr').length === 5, 'Lost confirmation can follow a successful atomic batch write');
+  frame.contentWindow.fetch = originalFetch;
+  await submit();
+  check((await results()).querySelectorAll('tbody tr').length === 5, 'Retry after lost confirmation does not duplicate labels');
+  check(!page.querySelector('#completion').hidden, 'Successful submission shows confirmation');
+  check(page.querySelector('#labeling-form').hidden, 'Next batch does not appear automatically');
+  check(page.querySelector('#next-batch').textContent === 'Label 1 more', 'Final partial batch is offered explicitly');
+  check((await results()).querySelectorAll('[data-label="Chosen label"]:not(:empty)').length === 5, 'Results show the submitted batch');
+  check([...(await results()).querySelectorAll('[data-label="Chosen label"]')].some(cell => cell.textContent === 'love'), 'Final corrected choice is saved');
+  await navigate(() => frame.contentWindow.location.reload());
+  check(!page.querySelector('#completion').hidden, 'Batch confirmation survives refresh');
+  await navigate(() => click('#next-batch'));
+  check(page.querySelectorAll('.tweet-number').length === 1, 'Final batch contains only the remaining tweet');
+  check(!page.querySelector('input:checked'), 'New batch starts without previous drafts');
+  check(page.querySelector('#submit-batch').hidden && !page.querySelector('#next-tweet').hidden, 'Final partial batch starts with Next');
+  fillBatch();
+  check(!page.querySelector('#submit-batch').hidden && page.querySelector('#next-tweet').hidden, 'Final partial batch shows Submit when its only tweet is labeled');
+  await submit();
+  check(page.querySelector('#completion-title').textContent === 'All tweets labeled', 'Final submission shows dataset completion');
+  check(page.querySelector('#next-batch-form').hidden, 'No next batch offered after exhaustion');
+  check((await results()).querySelectorAll('tbody tr').length === 6, 'Every tweet has one saved answer');
+  await navigate(() => click('#results-link'));
   check(!page.body.textContent.includes('browser-test@example.com'), 'Results do not expose email');
   check([...page.querySelectorAll('.participant-hash')].every(element => /^[0-9a-f]{64}$/.test(element.textContent)), 'Results show full participant hashes');
   for (const width of [320, 375, 414, 768]) {
     frame.style.width = `${width}px`;
     check(page.documentElement.scrollWidth <= width, `Results fit ${width}px`);
   }
-  await fetch('/leave', {method: 'POST'});
-  await navigate(() => { frame.src = '/'; });
+  await leave();
   await start('browser-test@example.com');
-  check(!page.querySelector('#completion').hidden, 'Re-entering same email resumes completion');
-  await fetch('/leave', {method: 'POST'});
-  await navigate(() => { frame.src = '/'; });
+  check(page.querySelector('#completion-title').textContent === 'All tweets labeled', 'Re-entering same email preserves saved progress');
+  await leave();
   await start('another@example.com');
-  check(page.querySelector('#progress-label').textContent === '0 of 6 labeled', 'Another participant receives every tweet');
+  check(page.querySelector('#progress-label').textContent === '0 of 5 labeled in this batch', 'Another participant receives an independent batch');
   await navigate(() => { frame.src = '/?blocked-storage=1'; });
   check(page.querySelector('dialog').open, 'Blocked storage still shows tutorial');
   click('#tutorial-done');
-  await save();
-  check(page.querySelector('#progress-label').textContent === '1 of 6 labeled', 'Blocked storage still permits saving');
+  check(!page.querySelector('#draft-warning').hidden, 'Blocked draft storage explains navigation limitation');
+  fillBatch();
+  await submit();
+  check(!page.querySelector('#completion').hidden, 'Blocked storage still permits batch submission');
+  check((await results()).querySelectorAll('tbody tr').length === 11, 'Separate participants save independent batches');
+  await leave();
+  await start('screenshot@example.com');
+  choose(0, 'joy');
   output.dataset.status = 'passed';
   output.textContent = passed.join('\n');
 }

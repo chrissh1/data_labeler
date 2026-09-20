@@ -62,21 +62,20 @@ try {
     await capture(`tutorial-${width}`);
     await evaluate('document.querySelector("#tutorial-done").click()');
   }
+  const resultsLoaded = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Results did not load')), 8000);
+    onLoad = () => { clearTimeout(timeout); resolve(); };
+  });
   await evaluate('document.querySelector("#results-link").click()', true);
-  let resultsOpened = false;
-  const deadline = Date.now() + 5000;
-  while (!resultsOpened && Date.now() < deadline) {
-    const opened = await (await fetch(`${debugOrigin}/json/list`)).json();
-    resultsOpened = opened.some(item => item.id !== target.id && item.url === appOrigin + '/results');
-    if (!resultsOpened) await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  assert(resultsOpened, 'Results must open a new tab');
-  await navigate('/results');
+  await resultsLoaded;
+  assert.equal(await evaluate('location.pathname'), '/results', 'Results must load in the same tab');
+  const opened = await (await fetch(`${debugOrigin}/json/list`)).json();
+  assert(!opened.some(item => item.id !== target.id && item.url.startsWith(appOrigin)), 'Navigation must not create a second tab');
   await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 850, deviceScaleFactor: 1, mobile: false });
   await capture('results-desktop');
   await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 850, deviceScaleFactor: 1, mobile: false });
   await capture('results-mobile');
-  console.log(`PASS: results opened a separate tab; screenshots saved to ${outputDirectory}`);
+  console.log(`PASS: Results opened in the same tab; screenshots saved to ${outputDirectory}`);
 } finally {
   socket.close();
 }

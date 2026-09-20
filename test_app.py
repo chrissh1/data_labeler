@@ -1,11 +1,7 @@
-import hashlib
-import json
 import os
-import re
 import sqlite3
 import tempfile
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 import flask
@@ -13,9 +9,10 @@ from jinja2 import DictLoader
 
 import app as labeling
 from scripts.build_assets import build_assets
+from batch_contract import BatchContract
 
 
-class LabelingTests(unittest.TestCase):
+class LabelingTests(BatchContract, unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -107,24 +104,6 @@ class LabelingTests(unittest.TestCase):
         for relative in ('static/style.css', 'static/task.js', 'tokens.css'):
             self.assertEqual((public / relative).read_bytes(), (self.directory / relative).read_bytes())
 
-    def start(self, email='participant@example.com', client=None):
-        return (client or self.client).post('/start', data={'email': email})
-
-    def save(self, tweet_id='0', label='joy', client=None):
-        return (client or self.client).post('/submit', json={'tweet_id': tweet_id, 'label': label})
-
-    def rows(self):
-        with labeling.get_db() as connection:
-            return connection.execute('SELECT * FROM responses ORDER BY id').fetchall()
-
-    def task(self):
-        response = self.client.get('/')
-        self.assertEqual(response.status_code, 200)
-        match = re.search(r'<script id="task-data" type="application/json">(.*?)</script>',
-                          response.get_data(as_text=True), re.DOTALL)
-        self.assertIsNotNone(match)
-        return json.loads(match.group(1))
-
     def test_numeric_csv_decodes_all_emotions_and_quoted_text(self):
         tweets = labeling.load_tweets()
         self.assertEqual(tweets[0]['text'], 'A sad message, with a comma')
@@ -140,103 +119,6 @@ class LabelingTests(unittest.TestCase):
             self.assertEqual(flask.render_template('reload-probe.html'), 'Before edit')
             loader.mapping['reload-probe.html'] = 'After edit'
             self.assertEqual(flask.render_template('reload-probe.html'), 'After edit')
-
-    def test_start_collects_email_and_session_keeps_only_hash(self):
-        self.assertEqual(self.start().status_code, 302)
-        with self.client.session_transaction() as session:
-            identifier = session['participant_id']
-            self.assertRegex(identifier, r'\A[0-9a-f]{64}\Z')
-            self.assertNotIn('participant@example.com', str(dict(session)))
-        self.assertNotEqual(identifier, hashlib.sha256(b'participant@example.com').hexdigest())
-
-    def test_individual_save_persists_and_results_show_only_hash(self):
-        self.start()
-        response = self.save()
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json['saved'])
-        rows = self.rows()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['label'], 'joy')
-        html = self.client.get('/results').get_data(as_text=True)
-        self.assertIn(rows[0]['participant_id'], html)
-        self.assertIn('A sad message, with a comma', html)
-        self.assertNotIn('participant@example.com', html)
-        self.assertNotIn('participant@example.com', str(tuple(rows[0])))
-
-    def test_task_includes_every_tweet_without_ground_truth(self):
-        self.start()
-        task = self.task()
-        self.assertEqual(len(task['tweets']), 6)
-        self.assertEqual({tweet['id'] for tweet in task['tweets']}, set('012345'))
-        self.assertTrue(all(tweet['label'] is None for tweet in task['tweets']))
-        self.assertTrue(all('ground_truth' not in tweet for tweet in task['tweets']))
-
-    def test_resume_uses_same_email_after_refresh_and_new_session(self):
-        self.start(' participant@EXAMPLE.COM ')
-        self.save('2', 'love')
-        self.client.post('/leave')
-        self.start()
-        task = self.task()
-        self.assertEqual(task['completedCount'], 1)
-        self.assertEqual(task['tweets'][0], {'id': '2', 'text': 'A loving message', 'label': 'love'})
-        self.assertEqual(len(self.rows()), 1)
-
-    def test_participants_have_separate_queues(self):
-        self.start()
-        self.save()
-        self.start('another@example.com')
-        self.assertEqual(self.task()['completedCount'], 0)
-        self.save('0', 'fear')
-        self.assertEqual(len(self.rows()), 2)
-        self.assertNotEqual(self.rows()[0]['participant_id'], self.rows()[1]['participant_id'])
-
-    def test_retries_and_corrections_keep_one_row(self):
-        self.start()
-        self.save('1', 'joy')
-        original = self.rows()[0]
-        self.save('1', 'joy')
-        self.assertEqual(tuple(self.rows()[0]), tuple(original))
-        self.save('1', 'love')
-        self.assertEqual(len(self.rows()), 1)
-        self.assertEqual(self.rows()[0]['label'], 'love')
-        self.assertEqual(self.rows()[0]['id'], original['id'])
-
-    def test_concurrent_retries_do_not_duplicate_rows(self):
-        clients = [labeling.app.test_client(), labeling.app.test_client()]
-        for client in clients:
-            self.start(client=client)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            statuses = list(executor.map(lambda client: self.save(client=client).status_code, clients))
-        self.assertEqual(statuses, [200, 200])
-        self.assertEqual(len(self.rows()), 1)
-
-    def test_all_tweets_can_be_completed_and_completion_survives_refresh(self):
-        self.start()
-        for tweet_id in '012345':
-            self.assertEqual(self.save(tweet_id).status_code, 200)
-        self.assertEqual(self.task()['completedCount'], 6)
-        self.assertTrue(all(tweet['label'] for tweet in self.task()['tweets']))
-        self.assertEqual(len(self.rows()), 6)
-
-    def test_empty_dataset_returns_empty_task(self):
-        labeling.DATA_FILE.write_text('id, tweet, emotion\n', encoding='utf-8')
-        self.start()
-        self.assertEqual(self.task(), {'tweets': [], 'completedCount': 0})
-
-    def test_invalid_email_and_unstarted_sessions_cannot_save(self):
-        for email in ('', 'not-an-email', 'a@@example.com', 'a b@example.com'):
-            self.assertEqual(self.start(email).status_code, 400)
-        self.assertEqual(self.save().status_code, 401)
-        self.assertEqual(len(self.rows()), 0)
-
-    def test_invalid_or_missing_submission_fields_do_not_write(self):
-        self.start()
-        for payload in ({}, {'tweet_id': '0'}, {'tweet_id': '99', 'label': 'joy'},
-                        {'tweet_id': '0', 'label': 'invalid'}, {'tweet_id': [], 'label': 'joy'},
-                        {'tweet_id': '0', 'label': []}, [], None):
-            with self.subTest(payload=payload):
-                self.assertEqual(self.client.post('/submit', json=payload).status_code, 400)
-        self.assertEqual(len(self.rows()), 0)
 
     def test_missing_hash_key_blocks_start(self):
         with patch.dict(labeling.app.config, EMAIL_HASH_KEY=None):

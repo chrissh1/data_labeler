@@ -20,6 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "tweets.csv"
 DATABASE = BASE_DIR / "labels.db"
 HASH_KEY_FILE = BASE_DIR / ".email_hash_key"
+BATCH_SIZE = 5
 EMAIL_PATTERN = re.compile(
     r"[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
     r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
@@ -198,24 +199,31 @@ app.wsgi_app = initialized_wsgi_app
 
 
 def participant_task(participant_id):
-    tweets = load_tweets()
+    by_id = {tweet["id"]: tweet for tweet in load_tweets()}
     with get_db() as connection:
         responses = connection.execute(
-            f"SELECT tweet_id, label FROM {response_table()} WHERE participant_id = {sql_parameter()} ORDER BY id",
+            f"SELECT tweet_id, label FROM {response_table()} WHERE participant_id = {sql_parameter()}",
             (participant_id,),
         ).fetchall()
-    by_id = {tweet["id"]: tweet for tweet in tweets}
-    saved = [
-        {"id": str(row["tweet_id"]), "text": by_id[str(row["tweet_id"])]["text"], "label": row["label"]}
-        for row in responses if str(row["tweet_id"]) in by_id
-    ]
-    saved_ids = {tweet["id"] for tweet in saved}
-    remaining = [
-        {"id": tweet["id"], "text": tweet["text"], "label": None}
-        for tweet in tweets if tweet["id"] not in saved_ids
-    ]
-    random.shuffle(remaining)
-    return {"tweets": saved + remaining, "completedCount": len(saved)}
+    saved = {str(row["tweet_id"]): row["label"] for row in responses if str(row["tweet_id"]) in by_id}
+    batch = flask.session.get("batch")
+    batch_ids = batch["tweet_ids"] if batch else []
+    saved_in_batch = sum(tweet_id in saved for tweet_id in batch_ids)
+    if (not batch or any(tweet_id not in by_id for tweet_id in batch_ids)
+            or 0 < saved_in_batch < len(batch_ids)):
+        remaining = [tweet_id for tweet_id in by_id if tweet_id not in saved]
+        batch_ids = random.sample(remaining, min(BATCH_SIZE, len(remaining)))
+        batch = {"id": secrets.token_urlsafe(16), "tweet_ids": batch_ids}
+        flask.session["batch"] = batch
+    return {
+        "batchId": batch["id"],
+        "tweets": [{"id": tweet_id, "text": by_id[tweet_id]["text"], "label": saved.get(tweet_id)}
+                   for tweet_id in batch_ids],
+        "submitted": bool(batch_ids) and all(tweet_id in saved for tweet_id in batch_ids),
+        "completedCount": len(saved),
+        "remainingCount": len(by_id) - len(saved),
+        "totalCount": len(by_id),
+    }
 
 
 @app.get("/tokens.css")
@@ -256,34 +264,70 @@ def leave():
     return flask.redirect(flask.url_for("index"))
 
 
+class BatchConflict(Exception):
+    pass
+
+
 @app.post("/submit")
 def submit():
     participant_id = flask.session.get("participant_id")
     if not participant_id:
-        return flask.jsonify(error="Enter your email again, then retry this answer."), 401
+        return flask.jsonify(error="Enter your email again before submitting."), 401
     payload = flask.request.get_json(silent=True)
-    if not isinstance(payload, dict):
-        return flask.jsonify(error="A message and emotion are required."), 400
-    tweet_id = payload.get("tweet_id")
-    label = payload.get("label")
-    valid_ids = {tweet["id"] for tweet in load_tweets()}
-    if not isinstance(tweet_id, str) or tweet_id not in valid_ids or label not in (
-        emotion.name.lower() for emotion in Emotion
-    ):
-        return flask.jsonify(error="A message or emotion was invalid."), 400
-    with get_db() as connection:
-        parameter = sql_parameter()
-        connection.execute(
-            f"""
-            INSERT INTO {response_table()} AS responses (participant_id, tweet_id, label)
-            VALUES ({parameter}, {parameter}, {parameter})
-            ON CONFLICT(participant_id, tweet_id) DO UPDATE
-            SET label = excluded.label, timestamp = CURRENT_TIMESTAMP
-            WHERE responses.label != excluded.label
-            """,
-            (participant_id, int(tweet_id), label),
-        )
+    if not isinstance(payload, dict) or not isinstance(payload.get("answers"), list):
+        return flask.jsonify(error="Label every tweet in the batch before submitting."), 400
+    batch = flask.session.get("batch")
+    if not batch or payload.get("batch_id") != batch["id"]:
+        return flask.jsonify(error="This batch is no longer active. Return to labeling to load your current batch."), 409
+    answers = payload["answers"]
+    batch_ids = set(batch["tweet_ids"])
+    labels = {}
+    valid_labels = {emotion.name.lower() for emotion in Emotion}
+    for answer in answers:
+        if (not isinstance(answer, dict) or not isinstance(answer.get("tweet_id"), str)
+                or not isinstance(answer.get("label"), str) or answer["label"] not in valid_labels
+                or answer["tweet_id"] in labels):
+            return flask.jsonify(error="A tweet or emotion was invalid."), 400
+        labels[answer["tweet_id"]] = answer["label"]
+    if not 1 <= len(labels) <= BATCH_SIZE or set(labels) != batch_ids:
+        return flask.jsonify(error="Label every tweet in this batch exactly once."), 400
+    if not batch_ids.issubset({tweet["id"] for tweet in load_tweets()}):
+        return flask.jsonify(error="The dataset changed. Reload to get an available batch."), 409
+    parameter = sql_parameter()
+    try:
+        with get_db() as connection:
+            # A stable write order avoids deadlocks when batches overlap across tabs.
+            for tweet_id in sorted(labels, key=int):
+                connection.execute(
+                    f"""
+                    INSERT INTO {response_table()} (participant_id, tweet_id, label)
+                    VALUES ({parameter}, {parameter}, {parameter})
+                    ON CONFLICT(participant_id, tweet_id) DO NOTHING
+                    """,
+                    (participant_id, int(tweet_id), labels[tweet_id]),
+                )
+            saved = connection.execute(
+                f"SELECT tweet_id, label FROM {response_table()} WHERE participant_id = {parameter}",
+                (participant_id,),
+            ).fetchall()
+            saved_labels = {str(row["tweet_id"]): row["label"] for row in saved}
+            if any(saved_labels[tweet_id] != label for tweet_id, label in labels.items()):
+                raise BatchConflict
+    except BatchConflict:
+        return flask.jsonify(error="This batch includes answers already submitted with different labels. Reload to see your saved progress."), 409
     return flask.jsonify(saved=True)
+
+
+@app.post("/next-batch")
+def next_batch():
+    participant_id = flask.session.get("participant_id")
+    if not participant_id:
+        return flask.render_template("error.html", message="Enter your email before starting a batch."), 401
+    task = participant_task(participant_id)
+    if task["tweets"] and not task["submitted"]:
+        return flask.render_template("error.html", message="Submit your current batch before starting another."), 409
+    flask.session.pop("batch", None)
+    return flask.redirect(flask.url_for("index"))
 
 
 @app.get("/results")

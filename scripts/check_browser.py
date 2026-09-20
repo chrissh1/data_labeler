@@ -65,7 +65,7 @@ def main():
         @labeling.app.after_request
         def block_storage_for_test(response):
             if flask.request.args.get("blocked-storage") == "1":
-                script = "<script>Object.defineProperty(window, 'localStorage', {get() {throw new Error('Storage blocked');}});</script>"
+                script = "<script>for (const name of ['localStorage', 'sessionStorage']) Object.defineProperty(window, name, {get() {throw new Error('Storage blocked');}});</script>"
                 response.set_data(response.get_data(as_text=True).replace("<head>", "<head>" + script))
             return response
 
@@ -111,7 +111,7 @@ def main():
                     raise SystemExit("Browser checks failed or did not finish within 30 seconds.")
             with labeling.get_db() as connection:
                 rows = connection.execute("SELECT participant_id FROM responses").fetchall()
-            assert len(rows) == 7 and all(len(row[0]) == 64 for row in rows)
+            assert len(rows) == 11 and all(len(row[0]) == 64 for row in rows)
             print("PASS: browser flow and persisted database checked using disposable storage.")
         finally:
             server.shutdown()
